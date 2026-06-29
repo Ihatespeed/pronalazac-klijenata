@@ -92,6 +92,7 @@ def run_overpass(query):
 
 
 def apply_filters(lead, settings):
+    """Vrati True ako lead prolazi filtere."""
     if settings["only_without_website"] and lead["Sajt"]:
         return False
     if settings["only_with_phone"] and not lead["Telefon"]:
@@ -105,14 +106,26 @@ def apply_filters(lead, settings):
 # INSTAGRAM PRETRAGA VIA SERPAPI
 # ============================================
 def find_instagram_serpapi(firm_name, location, api_key):
+    """
+    Pretražuje Google za Instagram profil firme.
+    Vraća URL ili prazan string.
+    """
     query = f'"{firm_name}" {location} site:instagram.com'
-    params = {"engine": "google", "q": query, "api_key": api_key, "num": 3}
+    params = {
+        "engine": "google",
+        "q": query,
+        "api_key": api_key,
+        "num": 3,
+    }
     try:
         data = requests.get(SERPAPI_URL, params=params, headers=HEADERS, timeout=30).json()
-        for result in data.get("organic_results", []):
+        organic = data.get("organic_results", [])
+        for result in organic:
             link = result.get("link", "")
             if "instagram.com/" in link:
+                # Filtriraj opšte stranice, uzmi samo profile
                 path = link.replace("https://www.instagram.com/", "").replace("https://instagram.com/", "")
+                # Preskoči tagove, lokacije, explore
                 if path and not path.startswith(("explore/", "p/", "reel/", "tags/", "locations/")):
                     return link
     except Exception:
@@ -121,12 +134,15 @@ def find_instagram_serpapi(firm_name, location, api_key):
 
 
 def enrich_with_instagram(leads, location, api_key, status_text, progress_bar):
+    """Dodaje Instagram kolonu na postojeću listu leadova."""
     total = len(leads)
     for i, lead in enumerate(leads):
         name = lead.get("Naziv", "")
         status_text.markdown(f"📸 *Tražim Instagram za: {name}* ({i+1}/{total})")
         progress_bar.progress((i + 1) / total)
-        lead["Instagram"] = find_instagram_serpapi(name, location, api_key)
+        ig = find_instagram_serpapi(name, location, api_key)
+        lead["Instagram"] = ig
+        # Pauza da ne bombardujemo API
         time.sleep(0.5)
     progress_bar.progress(1.0)
     status_text.empty()
@@ -162,6 +178,7 @@ def find_leads_osm(settings, progress_bar, status_text):
         name = tags.get("name", "").strip()
         if not name or name.lower() in seen:
             continue
+
         website = tags.get("website") or tags.get("contact:website") or tags.get("url") or ""
         phone = tags.get("phone") or tags.get("contact:phone") or tags.get("contact:mobile", "")
         email = tags.get("email") or tags.get("contact:email", "")
@@ -172,6 +189,7 @@ def find_leads_osm(settings, progress_bar, status_text):
         address = " ".join(filter(None, [street, housenumber, postcode, city]))
         lat = el.get("lat") or el.get("center", {}).get("lat", "")
         lon = el.get("lon") or el.get("center", {}).get("lon", "")
+
         lead = {
             "Naziv": name,
             "Telefon": phone,
@@ -183,6 +201,7 @@ def find_leads_osm(settings, progress_bar, status_text):
             "Mapa link": f"https://www.google.com/maps?q={lat},{lon}" if lat else "",
         }
         if not apply_filters(lead, settings):
+            status_text.markdown(f"⏭️ *Preskačem: {name}*")
             continue
         seen.add(name.lower())
         leads.append(lead)
@@ -233,6 +252,7 @@ def find_leads_serpapi(settings, progress_bar, status_text):
                 "Mapa link": f"https://www.google.com/maps?q={lat},{lon}" if lat else "",
             }
             if not apply_filters(lead, settings):
+                status_text.markdown(f"⏭️ *Preskačem: {name}*")
                 continue
             seen.add(name.lower())
             leads.append(lead)
@@ -291,6 +311,7 @@ def find_leads_outscraper(settings, progress_bar, status_text):
             "Mapa link": f"https://www.google.com/maps?q={lat},{lon}" if lat else "",
         }
         if not apply_filters(lead, settings):
+            status_text.markdown(f"⏭️ *Preskačem: {name}*")
             continue
         seen.add(name.lower())
         leads.append(lead)
@@ -301,213 +322,87 @@ def find_leads_outscraper(settings, progress_bar, status_text):
 
 
 # ============================================
-# UI — dotless.co aesthetic
+# IZGLED APLIKACIJE (MODERN UI)
 # ============================================
 st.set_page_config(page_title="Pronalazač Klijenata", page_icon="🎯", layout="wide")
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
 
-/* ── Reset to light / dotless palette ── */
-html, body, [class*="css"] {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    color: #0f0f0f;
-}
-.stApp {
-    background-color: #ffffff;
-}
-
-/* ── Hide Streamlit chrome ── */
-#MainMenu, footer, header { visibility: hidden; }
-[data-testid="stDecoration"] { display: none; }
-
-/* ── Sidebar ── */
-[data-testid="stSidebar"] {
-    background-color: #fafafa;
-    border-right: 1px solid #e8e8e8;
-}
-[data-testid="stSidebar"] * {
-    color: #0f0f0f !important;
-}
-[data-testid="stSidebar"] .stMarkdown h3 {
-    font-size: 0.7rem;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #888 !important;
-    margin-top: 1.4rem;
-    margin-bottom: 0.4rem;
-}
-[data-testid="stSidebar"] hr {
-    border-color: #e8e8e8;
-}
-
-/* ── Inputs ── */
-.stTextInput > div > div > input,
-.stNumberInput > div > div > input {
-    background: #fff !important;
-    border: 1px solid #d4d4d4 !important;
-    border-radius: 8px !important;
-    color: #0f0f0f !important;
-    font-size: 0.9rem !important;
-    padding: 0.55rem 0.75rem !important;
-    box-shadow: none !important;
-}
-.stTextInput > div > div > input:focus,
-.stNumberInput > div > div > input:focus {
-    border-color: #0f0f0f !important;
-    box-shadow: 0 0 0 2px rgba(15,15,15,0.08) !important;
-}
-
-/* Selectbox */
-.stSelectbox > div > div {
-    background: #fff !important;
-    border: 1px solid #d4d4d4 !important;
-    border-radius: 8px !important;
-    color: #0f0f0f !important;
-    font-size: 0.9rem !important;
-}
-
-/* Radio */
-.stRadio > label { font-size: 0.85rem; color: #444 !important; }
-
-/* Sliders */
-.stSlider > div > div > div > div { background: #0f0f0f !important; }
-
-/* Checkboxes */
-.stCheckbox > label > div[data-testid="stMarkdownContainer"] p {
-    font-size: 0.875rem;
-    color: #333 !important;
-}
-
-/* ── Primary button → dotless green ── */
-.stButton > button {
-    background-color: #16a34a !important;
-    color: #fff !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-weight: 600 !important;
-    font-size: 0.9rem !important;
-    padding: 0.6rem 1.4rem !important;
-    letter-spacing: 0.01em !important;
-    transition: background 0.15s ease !important;
-    box-shadow: none !important;
-    width: 100%;
-}
-.stButton > button:hover {
-    background-color: #15803d !important;
-    transform: none !important;
-    box-shadow: none !important;
-}
-
-/* ── Download button ── */
-[data-testid="stDownloadButton"] > button {
-    background-color: #fff !important;
-    color: #0f0f0f !important;
-    border: 1px solid #d4d4d4 !important;
-    border-radius: 8px !important;
-    font-weight: 500 !important;
-    font-size: 0.875rem !important;
-    padding: 0.5rem 1.2rem !important;
-}
-[data-testid="stDownloadButton"] > button:hover {
-    background-color: #f5f5f5 !important;
-    border-color: #aaa !important;
-}
-
-/* ── Metrics ── */
-[data-testid="stMetric"] {
-    background: #fff;
-    border: 1px solid #e8e8e8;
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
-}
-[data-testid="stMetricLabel"] p {
-    font-size: 0.75rem !important;
-    font-weight: 500;
-    color: #888 !important;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-}
-[data-testid="stMetricValue"] {
-    color: #0f0f0f !important;
-    font-size: 1.7rem !important;
-    font-weight: 700 !important;
-    -webkit-text-fill-color: #0f0f0f !important;
-    background: none !important;
-}
-
-/* ── Tabs ── */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 0;
-    border-bottom: 1px solid #e8e8e8;
-    background: transparent;
-}
-.stTabs [data-baseweb="tab"] {
-    background: transparent !important;
-    border-radius: 0 !important;
-    border-bottom: 2px solid transparent !important;
-    color: #888 !important;
-    font-size: 0.875rem;
-    font-weight: 500;
-    padding: 0.6rem 1.2rem !important;
-    margin-bottom: -1px;
-}
-.stTabs [aria-selected="true"] {
-    background: transparent !important;
-    border-bottom: 2px solid #0f0f0f !important;
-    color: #0f0f0f !important;
-}
-
-/* ── Alerts / info ── */
-.stInfo { background: #f0fdf4; border-left: 3px solid #16a34a; border-radius: 6px; color: #166534 !important; }
-.stSuccess { background: #f0fdf4; border-left: 3px solid #16a34a; border-radius: 6px; }
-.stWarning { background: #fffbeb; border-left: 3px solid #d97706; border-radius: 6px; }
-.stError { background: #fef2f2; border-left: 3px solid #dc2626; border-radius: 6px; }
-
-/* ── Dataframe ── */
-[data-testid="stDataFrame"] { border: 1px solid #e8e8e8; border-radius: 10px; overflow: hidden; }
-
-/* ── Progress bar ── */
-.stProgress > div > div > div > div { background-color: #16a34a !important; }
-
-/* ── Divider ── */
-hr { border-color: #e8e8e8 !important; }
-
-/* ── Expander ── */
-[data-testid="stExpander"] {
-    border: 1px solid #e8e8e8 !important;
-    border-radius: 8px !important;
-    background: #fafafa !important;
-}
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+    .stApp {
+        background: radial-gradient(circle at 20% 20%, #1a1c2e 0%, #0E1117 50%);
+    }
+    .hero { text-align: center; padding: 2.5rem 1rem 1rem 1rem; }
+    .main-title {
+        font-size: 3.5rem; font-weight: 800; letter-spacing: -1px;
+        background: linear-gradient(90deg, #6366F1, #8B5CF6, #EC4899);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        margin: 0;
+    }
+    .subtitle { color: #9CA3AF; font-size: 1.15rem; margin-top: 0.5rem; }
+    .glass-card {
+        background: rgba(31, 41, 55, 0.5);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 18px; padding: 1.5rem; margin-bottom: 1rem;
+    }
+    .stButton>button {
+        background: linear-gradient(90deg, #6366F1, #8B5CF6);
+        color: white; border: none; padding: 0.85rem 2rem;
+        border-radius: 14px; font-weight: 700; font-size: 1.1rem;
+        width: 100%; transition: 0.3s; letter-spacing: 0.3px;
+    }
+    .stButton>button:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 30px rgba(139, 92, 246, 0.45);
+    }
+    .stTextInput>div>div>input,
+    .stSelectbox>div>div,
+    .stNumberInput>div>div>input {
+        background-color: rgba(31, 41, 55, 0.8) !important;
+        color: white !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
+    }
+    [data-testid="stMetric"] {
+        background: rgba(31, 41, 55, 0.6);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 16px; padding: 1rem;
+    }
+    [data-testid="stMetricValue"] {
+        background: linear-gradient(90deg, #6366F1, #EC4899);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        font-weight: 800;
+    }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] {
+        background: rgba(31,41,55,0.5); border-radius: 12px 12px 0 0;
+        padding: 8px 20px; color: #9CA3AF;
+    }
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(90deg, #6366F1, #8B5CF6) !important;
+        color: white !important;
+    }
+    #MainMenu, footer, header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# ── HEADER ──────────────────────────────────────────────────────────────────
 st.markdown("""
-<div style="padding: 2.5rem 0 0.5rem 0; border-bottom: 1px solid #e8e8e8; margin-bottom: 2rem;">
-    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
-        <span style="font-size:1.1rem;">🎯</span>
-        <span style="font-size:0.85rem; font-weight:600; color:#0f0f0f; letter-spacing:0.02em;">Pronalazač Klijenata</span>
-    </div>
-    <h1 style="font-size:2.1rem; font-weight:700; color:#0f0f0f; margin:0 0 0.5rem 0; line-height:1.2; letter-spacing:-0.02em;">
-        Pronađite firme<br>bez veb sajta.
-    </h1>
-    <p style="color:#666; font-size:0.95rem; margin:0;">
-        OpenStreetMap, SerpAPI ili Outscraper — izaberite izvor i krenite.
-    </p>
+<div class="hero">
+    <p class="main-title">🎯 Pronalazač Klijenata</p>
+    <p class="subtitle">Pronađite firme bez veb sajta — OpenStreetMap, SerpAPI ili Outscraper</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ── SIDEBAR ─────────────────────────────────────────────────────────────────
+# ---------- SIDEBAR ----------
 with st.sidebar:
-    st.markdown("### Izvor podataka")
+    st.header("⚙️ Izvor podataka")
     source = st.radio(
         "Odakle preuzeti podatke?",
         ["🌍 OpenStreetMap (besplatno)", "🔎 SerpAPI (Google)", "🛰️ Outscraper (Google)"],
-        help="OSM je besplatan ali manje potpun. SerpAPI/Outscraper daju Google podatke (potreban API ključ).",
-        label_visibility="collapsed",
+        help="OSM je besplatan ali manje potpun. SerpAPI/Outscraper daju Google podatke (potreban API ključ)."
     )
 
     api_key = ""
@@ -517,88 +412,92 @@ with st.sidebar:
     oc_limit = 100
 
     if "SerpAPI" in source:
-        api_key = st.text_input("SerpAPI ključ", type="password", placeholder="Zalepite ključ")
+        api_key = st.text_input("🔑 SerpAPI ključ", type="password", placeholder="Zalepite ključ")
         st.markdown("[Nabavi ključ →](https://serpapi.com/manage-api-key)")
         max_pages = st.slider("Broj stranica (×20 rezultata)", 1, 10, 3)
     elif "Outscraper" in source:
-        api_key = st.text_input("Outscraper ključ", type="password", placeholder="Zalepite ključ")
+        api_key = st.text_input("🔑 Outscraper ključ", type="password", placeholder="Zalepite ključ")
         st.markdown("[Nabavi ključ →](https://app.outscraper.cloud/profile)")
         oc_limit = st.slider("Limit rezultata", 20, 400, 100, 20)
     else:
-        st.info("Ne treba API ključ.")
+        st.success("✅ Ne treba API ključ!")
         timeout = st.slider("Timeout upita (s)", 10, 120, 30, 5)
         search_in_name = st.checkbox("Pretraži i po imenu (custom)", value=True)
 
-    st.markdown("### Filteri")
+    st.markdown("### 🎚️ Filteri")
     only_without_website = st.checkbox("Samo BEZ sajta", value=True)
     only_with_phone = st.checkbox("Samo sa telefonom", value=False)
     only_with_address = st.checkbox("Samo sa adresom", value=False)
     max_results = st.slider("Maks. rezultata za prikaz", 10, 1000, 200, 10)
 
-    st.markdown("### Instagram pretraga")
+    # ---- INSTAGRAM OPCIJA ----
+    st.markdown("### 📸 Instagram pretraga")
     find_instagram = st.checkbox(
         "Traži Instagram profil",
         value=False,
-        help="Za svaku firmu pretražuje Google (site:instagram.com). Koristi SerpAPI — 1 upit po firmi.",
+        help="Za svaku firmu pretražuje Google (site:instagram.com). Koristi SerpAPI — 1 upit po firmi."
     )
 
     ig_api_key = ""
     if find_instagram:
+        # Ako je već SerpAPI izvor, reusi isti ključ — inače traži poseban
         if "SerpAPI" in source and api_key:
             ig_api_key = api_key
-            st.caption("Koristi isti SerpAPI ključ.")
+            st.info("📌 Koristi isti SerpAPI ključ.")
         else:
             ig_api_key = st.text_input(
-                "SerpAPI ključ (za Instagram)",
+                "🔑 SerpAPI ključ (za Instagram)",
                 type="password",
                 placeholder="Potreban za Instagram pretragu",
-                key="ig_key",
+                key="ig_key"
             )
             st.markdown("[Nabavi ključ →](https://serpapi.com/manage-api-key)")
-        st.caption("⚠️ Svaka firma = 1 SerpAPI upit. Pri 200 firmi = 200 upita.")
+        st.caption(
+            "⚠️ Svaka firma = 1 SerpAPI upit. "
+            "Pri 200 firmi = 200 upita. Proverite kvotu na [serpapi.com](https://serpapi.com/manage-api-key)."
+        )
 
     st.markdown("---")
-    with st.expander("Uputstvo"):
+    with st.expander("📖 Uputstvo"):
         st.markdown("""
-1. Izaberite **izvor** podataka
-2. (Ako treba) unesite **API ključ**
-3. Izaberite **tip firme** i **lokaciju**
-4. Podesite **filtere**
-5. Opciono: uključite **Instagram pretragu**
-6. Kliknite **Pretraži**
+        1. Izaberite **izvor** podataka
+        2. (Ako treba) unesite **API ključ**
+        3. Izaberite **tip firme** i **lokaciju**
+        4. Podesite **filtere**
+        5. Opciono: uključite **Instagram pretragu**
+        6. Kliknite **Pretraži**
         """)
 
-# ── MAIN SEARCH FORM ─────────────────────────────────────────────────────────
-c1, c2 = st.columns([1, 1], gap="medium")
+# ---------- GLAVNI UNOS ----------
+c1, c2 = st.columns([1, 1])
 with c1:
-    preset_choice = st.selectbox("Tip firme", list(BUSINESS_PRESETS.keys()))
+    preset_choice = st.selectbox("🏢 Tip firme", list(BUSINESS_PRESETS.keys()))
 with c2:
-    location = st.text_input("Grad / Lokacija", placeholder="npr. Beograd")
+    location = st.text_input("📍 Grad / Lokacija", placeholder="npr. Beograd")
 
 custom_text = ""
 if preset_choice == "Ostalo / Custom (slobodan tekst)":
-    custom_text = st.text_input("Ključna reč", placeholder="npr. pizza, salon, auto")
+    custom_text = st.text_input("✏️ Ključna reč", placeholder="npr. pizza, salon, auto")
 
-st.markdown("<div style='margin-top:0.25rem;'></div>", unsafe_allow_html=True)
-search_clicked = st.button("Pretraži →")
+search_clicked = st.button("🔍 Pretraži")
 
-# ── LOGIC ────────────────────────────────────────────────────────────────────
+# ---------- LOGIKA ----------
 if search_clicked:
     osm_filters, default_query = BUSINESS_PRESETS.get(preset_choice, ([], ""))
     query_text = custom_text if custom_text else default_query
 
     valid = True
     if not location:
-        st.warning("Unesite lokaciju.")
+        st.warning("⚠️ Unesite lokaciju.")
         valid = False
     elif preset_choice == "Ostalo / Custom (slobodan tekst)" and not custom_text:
-        st.warning("Unesite ključnu reč za custom pretragu.")
+        st.warning("⚠️ Unesite ključnu reč za custom pretragu.")
         valid = False
     elif "OpenStreetMap" not in source and not api_key:
-        st.warning("Unesite API ključ za izabrani izvor.")
+        st.warning("⚠️ Unesite API ključ za izabrani izvor.")
         valid = False
     elif find_instagram and not ig_api_key:
-        st.warning("Unesite SerpAPI ključ za Instagram pretragu.")
+        st.warning("⚠️ Unesite SerpAPI ključ za Instagram pretragu.")
         valid = False
 
     if valid:
@@ -617,11 +516,11 @@ if search_clicked:
             "limit": oc_limit,
         }
 
-        st.markdown("<div style='margin-top:1.5rem; border-top:1px solid #e8e8e8; padding-top:1.5rem;'></div>", unsafe_allow_html=True)
         progress = st.progress(0)
         status = st.empty()
 
-        with st.spinner("Pretražujem..."):
+        # --- KORAK 1: Pronađi firme ---
+        with st.spinner("Pretražujem firme..."):
             if "OpenStreetMap" in source:
                 leads, display_name = find_leads_osm(settings, progress, status)
             elif "SerpAPI" in source:
@@ -632,9 +531,10 @@ if search_clicked:
         status.empty()
         progress.empty()
 
+        # --- KORAK 2: Instagram pretraga (opcionalno) ---
         if leads and find_instagram and ig_api_key:
-            leads = leads[:max_results]
-            st.info(f"Tražim Instagram za {len(leads)} firmi…")
+            leads = leads[:max_results]  # Ograniči pre Instagram pretrage
+            st.info(f"📸 Tražim Instagram za {len(leads)} firmi... Ovo može potrajati.")
             ig_progress = st.progress(0)
             ig_status = st.empty()
             leads = enrich_with_instagram(leads, location, ig_api_key, ig_status, ig_progress)
@@ -644,15 +544,16 @@ if search_clicked:
         if leads:
             leads = leads[:max_results]
             df = pd.DataFrame(leads)
+
+            # Osiguraj da Instagram kolona postoji
             if "Instagram" not in df.columns:
                 df["Instagram"] = ""
 
             if display_name:
-                st.caption(f"Lokacija: {display_name}")
+                st.caption(f"📍 Lokacija: {display_name}")
 
-            # Metrics row
-            num_cols = 5 if find_instagram else 4
-            cols = st.columns(num_cols, gap="small")
+            # Metrike
+            cols = st.columns(5 if find_instagram else 4)
             cols[0].metric("Ukupno", len(df))
             cols[1].metric("Sa telefonom", int((df["Telefon"] != "").sum()))
             cols[2].metric("Sa adresom", int((df["Adresa"] != "").sum()))
@@ -660,21 +561,21 @@ if search_clicked:
             if find_instagram:
                 cols[4].metric("Sa Instagramom", int((df["Instagram"] != "").sum()))
 
-            st.markdown("<div style='margin-top:1rem;'></div>", unsafe_allow_html=True)
-            st.success(f"Pronađeno {len(df)} firmi.")
+            st.success(f"✨ Pronađeno {len(df)} firmi!")
 
-            tab1, tab2 = st.tabs(["Tabela", "Mapa"])
+            # Clickable Instagram linkovi u tabeli
+            display_df = df.copy()
+            if find_instagram and "Instagram" in display_df.columns:
+                display_df["Instagram"] = display_df["Instagram"].apply(
+                    lambda x: f'<a href="{x}" target="_blank">📸 Otvori</a>' if x else ""
+                )
 
+            tab1, tab2 = st.tabs(["📋 Tabela", "🗺️ Mapa"])
             with tab1:
                 if find_instagram:
-                    display_df = df.copy()
-                    display_df["Instagram"] = display_df["Instagram"].apply(
-                        lambda x: f'<a href="{x}" target="_blank">↗ Otvori</a>' if x else "—"
-                    )
                     st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
                 else:
                     st.dataframe(df, use_container_width=True, height=500)
-
             with tab2:
                 map_df = df.copy()
                 coords = map_df["Mapa link"].str.extract(r"q=([-\d.]+),([-\d.]+)")
@@ -686,19 +587,11 @@ if search_clicked:
                 else:
                     st.info("Nema koordinata za prikaz na mapi.")
 
-            st.markdown("<div style='margin-top:1rem;'></div>", unsafe_allow_html=True)
             csv = df.to_csv(index=False).encode("utf-8-sig")
             fname = f"klijenti_{preset_choice}_{location}.csv".replace(" ", "_")
-            st.download_button("Preuzmi CSV", data=csv, file_name=fname, mime="text/csv")
-
+            st.download_button("📥 Preuzmi CSV", data=csv, file_name=fname, mime="text/csv")
         else:
             st.info("Nije pronađena nijedna firma. Probajte drugi izvor, tip, grad ili olabavite filtere.")
 
-# ── FOOTER ───────────────────────────────────────────────────────────────────
-st.markdown("""
-<div style="margin-top:4rem; padding-top:1.5rem; border-top:1px solid #e8e8e8;
-            display:flex; justify-content:space-between; align-items:center;">
-    <span style="font-size:0.8rem; color:#aaa;">🎯 Pronalazač Klijenata</span>
-    <span style="font-size:0.8rem; color:#aaa;">Napravljeno sa ❤️</span>
-</div>
-""", unsafe_allow_html=True)
+st.markdown("---")
+st.markdown('<p style="text-align:center; color:#6B7280;">Napravljeno sa ❤️</p>', unsafe_allow_html=True)
