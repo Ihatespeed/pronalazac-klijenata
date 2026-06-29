@@ -103,6 +103,53 @@ def apply_filters(lead, settings):
 
 
 # ============================================
+# INSTAGRAM PRETRAGA VIA SERPAPI
+# ============================================
+def find_instagram_serpapi(firm_name, location, api_key):
+    """
+    Pretražuje Google za Instagram profil firme.
+    Vraća URL ili prazan string.
+    """
+    query = f'"{firm_name}" {location} site:instagram.com'
+    params = {
+        "engine": "google",
+        "q": query,
+        "api_key": api_key,
+        "num": 3,
+    }
+    try:
+        data = requests.get(SERPAPI_URL, params=params, headers=HEADERS, timeout=30).json()
+        organic = data.get("organic_results", [])
+        for result in organic:
+            link = result.get("link", "")
+            if "instagram.com/" in link:
+                # Filtriraj opšte stranice, uzmi samo profile
+                path = link.replace("https://www.instagram.com/", "").replace("https://instagram.com/", "")
+                # Preskoči tagove, lokacije, explore
+                if path and not path.startswith(("explore/", "p/", "reel/", "tags/", "locations/")):
+                    return link
+    except Exception:
+        pass
+    return ""
+
+
+def enrich_with_instagram(leads, location, api_key, status_text, progress_bar):
+    """Dodaje Instagram kolonu na postojeću listu leadova."""
+    total = len(leads)
+    for i, lead in enumerate(leads):
+        name = lead.get("Naziv", "")
+        status_text.markdown(f"📸 *Tražim Instagram za: {name}* ({i+1}/{total})")
+        progress_bar.progress((i + 1) / total)
+        ig = find_instagram_serpapi(name, location, api_key)
+        lead["Instagram"] = ig
+        # Pauza da ne bombardujemo API
+        time.sleep(0.5)
+    progress_bar.progress(1.0)
+    status_text.empty()
+    return leads
+
+
+# ============================================
 # IZVOR: OPENSTREETMAP
 # ============================================
 def find_leads_osm(settings, progress_bar, status_text):
@@ -383,6 +430,33 @@ with st.sidebar:
     only_with_address = st.checkbox("Samo sa adresom", value=False)
     max_results = st.slider("Maks. rezultata za prikaz", 10, 1000, 200, 10)
 
+    # ---- INSTAGRAM OPCIJA ----
+    st.markdown("### 📸 Instagram pretraga")
+    find_instagram = st.checkbox(
+        "Traži Instagram profil",
+        value=False,
+        help="Za svaku firmu pretražuje Google (site:instagram.com). Koristi SerpAPI — 1 upit po firmi."
+    )
+
+    ig_api_key = ""
+    if find_instagram:
+        # Ako je već SerpAPI izvor, reusi isti ključ — inače traži poseban
+        if "SerpAPI" in source and api_key:
+            ig_api_key = api_key
+            st.info("📌 Koristi isti SerpAPI ključ.")
+        else:
+            ig_api_key = st.text_input(
+                "🔑 SerpAPI ključ (za Instagram)",
+                type="password",
+                placeholder="Potreban za Instagram pretragu",
+                key="ig_key"
+            )
+            st.markdown("[Nabavi ključ →](https://serpapi.com/manage-api-key)")
+        st.caption(
+            "⚠️ Svaka firma = 1 SerpAPI upit. "
+            "Pri 200 firmi = 200 upita. Proverite kvotu na [serpapi.com](https://serpapi.com/manage-api-key)."
+        )
+
     st.markdown("---")
     with st.expander("📖 Uputstvo"):
         st.markdown("""
@@ -390,7 +464,8 @@ with st.sidebar:
         2. (Ako treba) unesite **API ključ**
         3. Izaberite **tip firme** i **lokaciju**
         4. Podesite **filtere**
-        5. Kliknite **Pretraži**
+        5. Opciono: uključite **Instagram pretragu**
+        6. Kliknite **Pretraži**
         """)
 
 # ---------- GLAVNI UNOS ----------
@@ -421,6 +496,9 @@ if search_clicked:
     elif "OpenStreetMap" not in source and not api_key:
         st.warning("⚠️ Unesite API ključ za izabrani izvor.")
         valid = False
+    elif find_instagram and not ig_api_key:
+        st.warning("⚠️ Unesite SerpAPI ključ za Instagram pretragu.")
+        valid = False
 
     if valid:
         settings = {
@@ -441,34 +519,63 @@ if search_clicked:
         progress = st.progress(0)
         status = st.empty()
 
-        with st.spinner("Pretražujem..."):
+        # --- KORAK 1: Pronađi firme ---
+        with st.spinner("Pretražujem firme..."):
             if "OpenStreetMap" in source:
                 leads, display_name = find_leads_osm(settings, progress, status)
             elif "SerpAPI" in source:
                 leads, display_name = find_leads_serpapi(settings, progress, status)
             else:
                 leads, display_name = find_leads_outscraper(settings, progress, status)
+
         status.empty()
         progress.empty()
+
+        # --- KORAK 2: Instagram pretraga (opcionalno) ---
+        if leads and find_instagram and ig_api_key:
+            leads = leads[:max_results]  # Ograniči pre Instagram pretrage
+            st.info(f"📸 Tražim Instagram za {len(leads)} firmi... Ovo može potrajati.")
+            ig_progress = st.progress(0)
+            ig_status = st.empty()
+            leads = enrich_with_instagram(leads, location, ig_api_key, ig_status, ig_progress)
+            ig_progress.empty()
+            ig_status.empty()
 
         if leads:
             leads = leads[:max_results]
             df = pd.DataFrame(leads)
 
+            # Osiguraj da Instagram kolona postoji
+            if "Instagram" not in df.columns:
+                df["Instagram"] = ""
+
             if display_name:
                 st.caption(f"📍 Lokacija: {display_name}")
 
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Ukupno", len(df))
-            m2.metric("Sa telefonom", int((df["Telefon"] != "").sum()))
-            m3.metric("Sa adresom", int((df["Adresa"] != "").sum()))
-            m4.metric("Bez sajta", int((df["Sajt"] == "").sum()))
+            # Metrike
+            cols = st.columns(5 if find_instagram else 4)
+            cols[0].metric("Ukupno", len(df))
+            cols[1].metric("Sa telefonom", int((df["Telefon"] != "").sum()))
+            cols[2].metric("Sa adresom", int((df["Adresa"] != "").sum()))
+            cols[3].metric("Bez sajta", int((df["Sajt"] == "").sum()))
+            if find_instagram:
+                cols[4].metric("Sa Instagramom", int((df["Instagram"] != "").sum()))
 
             st.success(f"✨ Pronađeno {len(df)} firmi!")
 
+            # Clickable Instagram linkovi u tabeli
+            display_df = df.copy()
+            if find_instagram and "Instagram" in display_df.columns:
+                display_df["Instagram"] = display_df["Instagram"].apply(
+                    lambda x: f'<a href="{x}" target="_blank">📸 Otvori</a>' if x else ""
+                )
+
             tab1, tab2 = st.tabs(["📋 Tabela", "🗺️ Mapa"])
             with tab1:
-                st.dataframe(df, use_container_width=True, height=500)
+                if find_instagram:
+                    st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+                else:
+                    st.dataframe(df, use_container_width=True, height=500)
             with tab2:
                 map_df = df.copy()
                 coords = map_df["Mapa link"].str.extract(r"q=([-\d.]+),([-\d.]+)")
