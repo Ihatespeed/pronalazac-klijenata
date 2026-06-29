@@ -287,21 +287,204 @@ st.markdown("""
     .stApp {
         background: radial-gradient(circle at 20% 20%, #1a1c2e 0%, #0E1117 50%);
     }
-
-    .hero {
-        text-align: center; padding: 2.5rem 1rem 1rem 1rem;
-    }
+    .hero { text-align: center; padding: 2.5rem 1rem 1rem 1rem; }
     .main-title {
         font-size: 3.5rem; font-weight: 800; letter-spacing: -1px;
         background: linear-gradient(90deg, #6366F1, #8B5CF6, #EC4899);
         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         margin: 0;
     }
-    .subtitle {
-        color: #9CA3AF; font-size: 1.15rem; margin-top: 0.5rem;
-    }
-
-    /* Glassmorphism kartice */
+    .subtitle { color: #9CA3AF; font-size: 1.15rem; margin-top: 0.5rem; }
     .glass-card {
         background: rgba(31, 41, 55, 0.5);
-        backdrop-filter: bl
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 18px; padding: 1.5rem; margin-bottom: 1rem;
+    }
+    .stButton>button {
+        background: linear-gradient(90deg, #6366F1, #8B5CF6);
+        color: white; border: none; padding: 0.85rem 2rem;
+        border-radius: 14px; font-weight: 700; font-size: 1.1rem;
+        width: 100%; transition: 0.3s; letter-spacing: 0.3px;
+    }
+    .stButton>button:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 30px rgba(139, 92, 246, 0.45);
+    }
+    .stTextInput>div>div>input,
+    .stSelectbox>div>div,
+    .stNumberInput>div>div>input {
+        background-color: rgba(31, 41, 55, 0.8) !important;
+        color: white !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
+    }
+    [data-testid="stMetric"] {
+        background: rgba(31, 41, 55, 0.6);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 16px; padding: 1rem;
+    }
+    [data-testid="stMetricValue"] {
+        background: linear-gradient(90deg, #6366F1, #EC4899);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        font-weight: 800;
+    }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] {
+        background: rgba(31,41,55,0.5); border-radius: 12px 12px 0 0;
+        padding: 8px 20px; color: #9CA3AF;
+    }
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(90deg, #6366F1, #8B5CF6) !important;
+        color: white !important;
+    }
+    #MainMenu, footer, header {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="hero">
+    <p class="main-title">🎯 Pronalazač Klijenata</p>
+    <p class="subtitle">Pronađite firme bez veb sajta — OpenStreetMap, SerpAPI ili Outscraper</p>
+</div>
+""", unsafe_allow_html=True)
+
+# ---------- SIDEBAR ----------
+with st.sidebar:
+    st.header("⚙️ Izvor podataka")
+    source = st.radio(
+        "Odakle preuzeti podatke?",
+        ["🌍 OpenStreetMap (besplatno)", "🔎 SerpAPI (Google)", "🛰️ Outscraper (Google)"],
+        help="OSM je besplatan ali manje potpun. SerpAPI/Outscraper daju Google podatke (potreban API ključ)."
+    )
+
+    api_key = ""
+    timeout = 30
+    search_in_name = True
+    max_pages = 3
+    oc_limit = 100
+
+    if "SerpAPI" in source:
+        api_key = st.text_input("🔑 SerpAPI ključ", type="password", placeholder="Zalepite ključ")
+        st.markdown("[Nabavi ključ →](https://serpapi.com/manage-api-key)")
+        max_pages = st.slider("Broj stranica (×20 rezultata)", 1, 10, 3)
+    elif "Outscraper" in source:
+        api_key = st.text_input("🔑 Outscraper ključ", type="password", placeholder="Zalepite ključ")
+        st.markdown("[Nabavi ključ →](https://app.outscraper.cloud/profile)")
+        oc_limit = st.slider("Limit rezultata", 20, 400, 100, 20)
+    else:
+        st.success("✅ Ne treba API ključ!")
+        timeout = st.slider("Timeout upita (s)", 10, 120, 30, 5)
+        search_in_name = st.checkbox("Pretraži i po imenu (custom)", value=True)
+
+    st.markdown("### 🎚️ Filteri")
+    only_without_website = st.checkbox("Samo BEZ sajta", value=True)
+    only_with_phone = st.checkbox("Samo sa telefonom", value=False)
+    only_with_address = st.checkbox("Samo sa adresom", value=False)
+    max_results = st.slider("Maks. rezultata za prikaz", 10, 1000, 200, 10)
+
+    st.markdown("---")
+    with st.expander("📖 Uputstvo"):
+        st.markdown("""
+        1. Izaberite **izvor** podataka
+        2. (Ako treba) unesite **API ključ**
+        3. Izaberite **tip firme** i **lokaciju**
+        4. Podesite **filtere**
+        5. Kliknite **Pretraži**
+        """)
+
+# ---------- GLAVNI UNOS ----------
+c1, c2 = st.columns([1, 1])
+with c1:
+    preset_choice = st.selectbox("🏢 Tip firme", list(BUSINESS_PRESETS.keys()))
+with c2:
+    location = st.text_input("📍 Grad / Lokacija", placeholder="npr. Beograd")
+
+custom_text = ""
+if preset_choice == "Ostalo / Custom (slobodan tekst)":
+    custom_text = st.text_input("✏️ Ključna reč", placeholder="npr. pizza, salon, auto")
+
+search_clicked = st.button("🔍 Pretraži")
+
+# ---------- LOGIKA ----------
+if search_clicked:
+    osm_filters, default_query = BUSINESS_PRESETS.get(preset_choice, ([], ""))
+    query_text = custom_text if custom_text else default_query
+
+    valid = True
+    if not location:
+        st.warning("⚠️ Unesite lokaciju.")
+        valid = False
+    elif preset_choice == "Ostalo / Custom (slobodan tekst)" and not custom_text:
+        st.warning("⚠️ Unesite ključnu reč za custom pretragu.")
+        valid = False
+    elif "OpenStreetMap" not in source and not api_key:
+        st.warning("⚠️ Unesite API ključ za izabrani izvor.")
+        valid = False
+
+    if valid:
+        settings = {
+            "location": location,
+            "osm_filters": osm_filters,
+            "custom_text": custom_text,
+            "query_text": query_text,
+            "api_key": api_key,
+            "only_without_website": only_without_website,
+            "only_with_phone": only_with_phone,
+            "only_with_address": only_with_address,
+            "timeout": timeout,
+            "search_in_name": search_in_name,
+            "max_pages": max_pages,
+            "limit": oc_limit,
+        }
+
+        progress = st.progress(0)
+        status = st.empty()
+
+        with st.spinner("Pretražujem..."):
+            if "OpenStreetMap" in source:
+                leads, display_name = find_leads_osm(settings, progress, status)
+            elif "SerpAPI" in source:
+                leads, display_name = find_leads_serpapi(settings, progress, status)
+            else:
+                leads, display_name = find_leads_outscraper(settings, progress, status)
+        status.empty()
+        progress.empty()
+
+        if leads:
+            leads = leads[:max_results]
+            df = pd.DataFrame(leads)
+
+            if display_name:
+                st.caption(f"📍 Lokacija: {display_name}")
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Ukupno", len(df))
+            m2.metric("Sa telefonom", int((df["Telefon"] != "").sum()))
+            m3.metric("Sa adresom", int((df["Adresa"] != "").sum()))
+            m4.metric("Bez sajta", int((df["Sajt"] == "").sum()))
+
+            st.success(f"✨ Pronađeno {len(df)} firmi!")
+
+            tab1, tab2 = st.tabs(["📋 Tabela", "🗺️ Mapa"])
+            with tab1:
+                st.dataframe(df, use_container_width=True, height=500)
+            with tab2:
+                map_df = df.copy()
+                coords = map_df["Mapa link"].str.extract(r"q=([-\d.]+),([-\d.]+)")
+                map_df["lat"] = pd.to_numeric(coords[0], errors="coerce")
+                map_df["lon"] = pd.to_numeric(coords[1], errors="coerce")
+                map_df = map_df.dropna(subset=["lat", "lon"])
+                if not map_df.empty:
+                    st.map(map_df[["lat", "lon"]])
+                else:
+                    st.info("Nema koordinata za prikaz na mapi.")
+
+            csv = df.to_csv(index=False).encode("utf-8-sig")
+            fname = f"klijenti_{preset_choice}_{location}.csv".replace(" ", "_")
+            st.download_button("📥 Preuzmi CSV", data=csv, file_name=fname, mime="text/csv")
+        else:
+            st.info("Nije pronađena nijedna firma. Probajte drugi izvor, tip, grad ili olabavite filtere.")
+
+st.markdown("---")
+st.markdown('<p style="text-align:center; color:#6B7280;">Napravljeno sa ❤️</p>', unsafe_allow_html=True)
